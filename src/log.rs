@@ -19,7 +19,7 @@ use anyhow::Result;
 
 pub struct Wal{
     file: File,
-    pub entries: Vector<LogEntry>,
+    pub entries: Vec<LogEntry>,
 }
 
 impl Wal {
@@ -64,9 +64,26 @@ impl Wal {
         Ok(())
     }
 
-    fn append(&mut self, entry: &LogEntry) -> Result<()> {
+    pub fn append(&mut self, entry: &LogEntry) -> Result<()> {
+        let data = bincode::serialize(entry)?;
+        let len = data.len() as u32;
+        let len_bytes = len.to_le_bytes();
+
+        self.file.seek(SeekFrom::End(0))?;
+        self.file.write_all(&len_bytes)?;
+        self.file.write_all(&data)?;
+        self.file.flush()?;
+
+        self.entries.push(entry.clone());
+
+        Ok(())
         //add u32 log entry length header into 4 byte header
         //add log entry itself serialized next
+    }
+
+    pub fn sync(&mut self) -> Result<()> {
+        self.file.sync_all()?;
+        Ok(())
     }
 
 }
