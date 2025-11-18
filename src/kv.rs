@@ -26,6 +26,4 @@ impl KvStore {
     pub fn get(&self, key: &str) -> Option<String> {
         self.map.get(key).cloned()
     }
-
-
 }
