@@ -28,3 +28,13 @@ pub struct AppendEntriesReply {
     pub term: u64,
     pub success: bool
 }
+
+use tokio::net::{TcpListener, TcpStream};
+use anyhow::Result;
+use std::sync::{Arc, Mutex};
+use crate::raft::state::RaftNode;
+
+pub async fn start_rpc_server(node: Arc<Mutex<RaftNode>>, addr: &str) {
+    let listener = TcpListener::bind(addr).await?;
+
+}
