@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
         kv.apply(&entry.cmd);
     }
 
-    let new_index = wal.entries.len() as u64 + 1;
+    let new_index: u64 = wal.entries.len() as u64 + 1;
 
 
     let entry = LogEntry {
