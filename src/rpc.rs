@@ -37,4 +37,15 @@ use crate::raft::state::RaftNode;
 pub async fn start_rpc_server(node: Arc<Mutex<RaftNode>>, addr: &str) {
     let listener = TcpListener::bind(addr).await?;
 
+    loop {
+        let (socket, _) = listener.accept().await?;
+        let node = node.clone();
+
+        // handle connection to be implemented
+        tokio::spawn(async move {
+            // if let Err(e) = handle_connection(node, socket).await {
+            //     eprintln!("RPC handler error: {:?}", e);
+            // }
+        });
+    }
 }
