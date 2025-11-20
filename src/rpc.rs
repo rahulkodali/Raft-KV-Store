@@ -43,9 +43,38 @@ pub async fn start_rpc_server(node: Arc<Mutex<RaftNode>>, addr: &str) {
 
         // handle connection to be implemented
         tokio::spawn(async move {
-            // if let Err(e) = handle_connection(node, socket).await {
-            //     eprintln!("RPC handler error: {:?}", e);
-            // }
+            if let Err(e) = handle_connection(node, socket).await {
+                eprintln!("RPC handler error: {:?}", e);
+            }
         });
     }
 }
+
+async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) -> Result<()> {
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut buf = Vec::new();
+    socket.read_to_end(&mut buf).await?;
+
+    let msg = std::str::from_utf8(&buf)?;
+
+    if msg.contains("\"RequestVoteArgs\"") {
+        let args: RequestVoteArgs = serde_json::from_str(msg)?;
+        // let reply = node.lock().unwrap().handle_request_vote(args);
+        let out = serde_json::to_vec(&reply)?;
+        socket.write_all(&out).await?;
+    } else if msg.contains("\"AppendEntriesArgs\"") {
+        let args: AppendEntriesArgs = serde_json::from_str(msg)?;
+        // let reply = node.lock().unwrap().handle_append_entries(args);
+        let out = serde_json::to_vec(&reply)?;
+        socket.write_all(&out).await?;
+    }
+    Ok()
+}
+
+
+
+
+
+
