@@ -73,7 +73,19 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
     Ok()
 }
 
+pub async fn send_request_vote(addr: &str, args: &RequestVoteArgs) -> Result<RequestVoteReply> {
 
+    let mut stream = TcpListener::connect(addr).await?;
+
+    let data = serde_json::to_vec(args)?;
+    stream.write_all(&data).await?;
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+    let reply: RequestVoteReply = serde_json::from_slice(&buf)?;
+
+    Ok(reply)
+}
 
 
 
