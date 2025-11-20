@@ -28,3 +28,7 @@ pub struct RaftNode {
 
     pub election_deadline: std::time::Instant,
 }
+
+impl RaftNode {
+    
+}

@@ -1,5 +1,7 @@
 mod log;
 mod kv;
+mod state;
+mod rpc;
 
 use crate::log::{Wal, LogEntry, Command};
 use crate::kv::KvStore;
