@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -41,36 +43,37 @@ impl RaftNode {
         self.election_deadline = Instant::now() + Duration::from_millis(ms);
     }
 
-    pub fn tick_loop(&mut self) {
+    pub fn tick_loop(&mut self) -> Option<(RequestVoteArgs, Vec<String>)> {
+        // Leaders never time out
         if self.role == Role::Leader {
-            return;
+            return None;
         }
 
+        // Election timeout?
         if Instant::now() > self.election_deadline {
-            self.start_election();
+            return Some(self.start_election());
         }
+
+        None
     }
 
-    pub fn start_election(&mut self) {
-        // lock raftNode
+    pub fn start_election(&mut self) -> (RequestVoteArgs, Vec<String>) {
 
         self.role = Role::Candidate;
         self.current_term += 1;
         self.voted_for = Some(self.id);
         self.reset_election_timeout();
 
-
         let last_log_index = self.log.entries.len() as u64;
-        let last_log_term =  self.log.entries.last().map(|e| e.term).unwrap_or(0);
+        let last_log_term = self.log.entries.last().map(|e| e.term).unwrap_or(0);
 
-        let voteRequest = RequestVoteArgs {
-            term : last_log_term,
+        let vote_request = RequestVoteArgs {
+            term: self.current_term,
             candidate_id: self.id,
+            last_log_index,
+            last_log_term,
         };
 
-        //unlock raftNode
-
-        // loop through peers and spawn async tasks 
-        // send_request_vote(addr, args);
+        (vote_request, self.peers.clone())
     }
 }
