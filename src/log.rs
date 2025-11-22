@@ -14,7 +14,7 @@ pub struct LogEntry {
 }
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use anyhow::Result;
 
 pub struct Wal{
@@ -81,13 +81,45 @@ impl Wal {
         //add log entry itself serialized next
     }
 
+    pub fn truncate_from(&mut self, start_index: u64) -> Result<()> {
+        if start_index == 0 {
+            return Ok(());
+        }
+        self.entries.retain(|entry| entry.index < start_index);
+        self.rewrite_file()
+    }
+
+    fn rewrite_file(&mut self) -> Result<()> {
+        self.file.set_len(0)?;
+        self.file.seek(SeekFrom::Start(0))?;
+        for entry in &self.entries {
+            let data = bincode::serialize(entry)?;
+            let len = data.len() as u32;
+            self.file.write_all(&len.to_le_bytes())?;
+            self.file.write_all(&data)?;
+        }
+        self.file.flush()?;
+        Ok(())
+    }
+
+    pub fn last_index(&self) -> u64 {
+        self.entries.last().map(|e| e.index).unwrap_or(0)
+    }
+
+    pub fn term_at(&self, index: u64) -> Option<u64> {
+        if index == 0 {
+            return Some(0);
+        }
+        let idx = (index - 1) as usize;
+        self.entries.get(idx).map(|e| e.term)
+    }
+
     pub fn sync(&mut self) -> Result<()> {
         self.file.sync_all()?;
         Ok(())
     }
 
 }
-
 
 
 

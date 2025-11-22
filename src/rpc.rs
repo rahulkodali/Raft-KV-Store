@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use crate::log::LogEntry;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RequestVoteArgs {
     pub term: u64,
     pub candidate_id: u64,
@@ -9,13 +9,13 @@ pub struct RequestVoteArgs {
     pub last_log_term: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RequestVoteReply {
     pub term: u64,
-    pub vote_granted: u64,
+    pub vote_granted: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppendEntriesArgs {
     pub term: u64,
     pub leader_id: u64,
@@ -25,7 +25,7 @@ pub struct AppendEntriesArgs {
     pub leader_commit: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppendEntriesReply {
     pub term: u64,
     pub success: bool
@@ -60,23 +60,15 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
 
     if let Ok(args) = serde_json::from_slice::<RequestVoteArgs>(&buf) {
         let reply = {
-            let node = node.lock().unwrap();
-            let vote_granted = if args.term >= node.current_term { 1 } else { 0 };
-            RequestVoteReply {
-                term: node.current_term,
-                vote_granted,
-            }
+            let mut node = node.lock().unwrap();
+            node.handle_request_vote(args)
         };
         let out = serde_json::to_vec(&reply)?;
         socket.write_all(&out).await?;
     } else if let Ok(args) = serde_json::from_slice::<AppendEntriesArgs>(&buf) {
-        //append entries logic to raftNode
         let reply = {
-            let node = node.lock().unwrap();
-            AppendEntriesReply {
-                term: node.current_term,
-                success: args.term >= node.current_term,
-            }
+            let mut node = node.lock().unwrap();
+            node.handle_append_entries(args)
         };
         let out = serde_json::to_vec(&reply)?;
         socket.write_all(&out).await?;
@@ -87,7 +79,6 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
 }
 
 pub async fn send_request_vote(addr: &str, args: &RequestVoteArgs) -> Result<RequestVoteReply> {
-
     let mut stream = TcpStream::connect(addr).await?;
 
     let data = serde_json::to_vec(args)?;
@@ -97,5 +88,16 @@ pub async fn send_request_vote(addr: &str, args: &RequestVoteArgs) -> Result<Req
     stream.read_to_end(&mut buf).await?;
     let reply: RequestVoteReply = serde_json::from_slice(&buf)?;
 
+    Ok(reply)
+}
+
+pub async fn send_append_entries(addr: &str, args: &AppendEntriesArgs) -> Result<AppendEntriesReply> {
+    let mut stream = TcpStream::connect(addr).await?;
+    let data = serde_json::to_vec(args)?;
+    stream.write_all(&data).await?;
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+    let reply: AppendEntriesReply = serde_json::from_slice(&buf)?;
     Ok(reply)
 }
