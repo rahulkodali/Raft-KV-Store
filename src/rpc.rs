@@ -5,6 +5,8 @@ use crate::log::LogEntry;
 pub struct RequestVoteArgs {
     pub term: u64,
     pub candidate_id: u64,
+    pub last_log_index: u64,
+    pub last_log_term: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
