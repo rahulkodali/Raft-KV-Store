@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::log::Command;
+use crate::raft::log::Command;
 
 pub struct KvStore {
     map: HashMap<String, String>,

@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use crate::log::LogEntry;
+use crate::raft::log::LogEntry;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RequestVoteArgs {
@@ -35,7 +35,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use anyhow::{Result, anyhow};
 use std::sync::{Arc, Mutex};
-use crate::state::RaftNode;
+use crate::raft::state::RaftNode;
 
 /// Start a TCP server to handle incoming Raft RPCs.
 pub async fn start_rpc_server(node: Arc<Mutex<RaftNode>>, addr: &str) -> Result<()> {
