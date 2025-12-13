@@ -2,7 +2,7 @@
 # Raft-Lite Distributed Key–Value Store (Rust)
 
 A minimal, educational implementation of the Raft Consensus Algorithm in Rust, featuring leader election, log replication, conflict resolution, crash recovery, and a write-ahead log (WAL).
-This project demonstrates how real databases like etcd, CockroachDB, and TiKV maintain strong consistency across distributed nodes. Built to learn some stuff.
+This project demonstrates how real databases like etcd, CockroachDB, and TiKV maintain strong consistency across distributed nodes. Built to learn some stuff. https://raft.github.io/raft.pdf
 
 ## Features
 
