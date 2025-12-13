@@ -37,6 +37,7 @@ use anyhow::{Result, anyhow};
 use std::sync::{Arc, Mutex};
 use crate::state::RaftNode;
 
+/// Start a TCP server to handle incoming Raft RPCs.
 pub async fn start_rpc_server(node: Arc<Mutex<RaftNode>>, addr: &str) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
 
@@ -53,6 +54,7 @@ pub async fn start_rpc_server(node: Arc<Mutex<RaftNode>>, addr: &str) -> Result<
     }
 }
 
+/// Decode a single inbound RPC request and write the corresponding reply.
 async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) -> Result<()> {
 
     let mut buf = Vec::new();
@@ -78,6 +80,7 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
     Ok(())
 }
 
+/// Send a RequestVote RPC to a peer and decode the reply.
 pub async fn send_request_vote(addr: &str, args: &RequestVoteArgs) -> Result<RequestVoteReply> {
     let mut stream = TcpStream::connect(addr).await?;
 
@@ -91,6 +94,7 @@ pub async fn send_request_vote(addr: &str, args: &RequestVoteArgs) -> Result<Req
     Ok(reply)
 }
 
+/// Send an AppendEntries (heartbeat or replication) RPC to a peer.
 pub async fn send_append_entries(addr: &str, args: &AppendEntriesArgs) -> Result<AppendEntriesReply> {
     let mut stream = TcpStream::connect(addr).await?;
     let data = serde_json::to_vec(args)?;

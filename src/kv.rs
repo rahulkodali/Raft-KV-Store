@@ -6,12 +6,14 @@ pub struct KvStore {
 }
 
 impl KvStore {
+    /// Create an empty in-memory key-value store.
     pub fn new() -> Self {
         KvStore {
             map: HashMap::new(),
         }
     }
 
+    /// Apply a replicated command to the store.
     pub fn apply(&mut self, cmd: &Command){
         match cmd {
             Command::Put(k, v) => {
@@ -23,6 +25,7 @@ impl KvStore {
         }
     }
 
+    /// Read a value by key, cloning the stored string if present.
     pub fn get(&self, key: &str) -> Option<String> {
         self.map.get(key).cloned()
     }

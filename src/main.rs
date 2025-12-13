@@ -12,6 +12,7 @@ use crate::log::Wal;
 use crate::rpc::start_rpc_server;
 use crate::state::{spawn_tick_loop, RaftNode};
 
+/// Entry point for launching a single Raft node and its RPC server.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();

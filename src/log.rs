@@ -23,6 +23,7 @@ pub struct Wal{
 }
 
 impl Wal {
+    /// Open (or create) a WAL file and eagerly load all existing entries.
     pub fn open(path: &str) -> Result<Wal> {
         let file = OpenOptions::new()
         .read(true)
@@ -39,6 +40,7 @@ impl Wal {
         Ok(wal)
     }
 
+    /// Deserialize all log entries from disk into memory.
     fn load(&mut self) -> Result<()> {
         self.file.seek(SeekFrom::Start(0))?;
         let mut buf = Vec::new();
@@ -64,6 +66,7 @@ impl Wal {
         Ok(())
     }
 
+    /// Append a single log entry to disk and the in-memory buffer.
     pub fn append(&mut self, entry: &LogEntry) -> Result<()> {
         let data = bincode::serialize(entry)?;
         let len = data.len() as u32;
@@ -81,6 +84,7 @@ impl Wal {
         //add log entry itself serialized next
     }
 
+    /// Drop entries starting at `start_index` (1-based) and rewrite the WAL.
     pub fn truncate_from(&mut self, start_index: u64) -> Result<()> {
         if start_index == 0 {
             return Ok(());
@@ -89,6 +93,7 @@ impl Wal {
         self.rewrite_file()
     }
 
+    /// Rewrite the WAL file from the current in-memory entries.
     fn rewrite_file(&mut self) -> Result<()> {
         self.file.set_len(0)?;
         self.file.seek(SeekFrom::Start(0))?;
@@ -102,10 +107,12 @@ impl Wal {
         Ok(())
     }
 
+    /// Return the highest log index present (or 0 if empty).
     pub fn last_index(&self) -> u64 {
         self.entries.last().map(|e| e.index).unwrap_or(0)
     }
 
+    /// Get the term at a specific 1-based log index (0 returns Some(0)).
     pub fn term_at(&self, index: u64) -> Option<u64> {
         if index == 0 {
             return Some(0);
@@ -114,13 +121,13 @@ impl Wal {
         self.entries.get(idx).map(|e| e.term)
     }
 
+    /// Flush all buffered WAL data to stable storage.
     pub fn sync(&mut self) -> Result<()> {
         self.file.sync_all()?;
         Ok(())
     }
 
 }
-
 
 
 

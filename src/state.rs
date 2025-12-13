@@ -39,6 +39,7 @@ pub struct RaftNode {
 }
 
 impl RaftNode {
+    /// Construct a new Raft node with empty volatile state and a loaded WAL/KV.
     pub fn new(id: u64, peers: Vec<String>, wal: Wal, kv: KvStore) -> Self {
         let mut node = RaftNode {
             id,
@@ -58,11 +59,13 @@ impl RaftNode {
         node
     }
 
+    /// Refresh the randomized election timeout window.
     pub fn reset_election_timeout(&mut self) {
         let ms = 150 + rand::random::<u64>() % 150;
         self.election_deadline = Instant::now() + Duration::from_millis(ms);
     }
 
+    /// Advance time-driven logic; trigger an election if this follower/candidate times out.
     pub fn tick_loop(&mut self) -> Option<(RequestVoteArgs, Vec<String>)> {
         // Leaders never time out
         if self.role == Role::Leader {
@@ -78,6 +81,7 @@ impl RaftNode {
     }
 
     // after this loop through peers and send vote requests -> if majority call become_leader() else change back to Follower
+    /// Enter candidate role, bump term, self-vote, and return vote request + peer list.
     pub fn start_election(&mut self) -> (RequestVoteArgs, Vec<String>) {
 
         self.role = Role::Candidate;
@@ -99,6 +103,7 @@ impl RaftNode {
     }
 
     // after this start sending heartbeats
+    /// Transition to leader and initialize replication tracking indices.
     pub fn become_leader(&mut self) {
         self.role = Role::Leader;
         let last_index = self.log.entries.len() as u64;
@@ -107,8 +112,9 @@ impl RaftNode {
         self.match_index = vec![0; self.peers.len()];
     }
 
+    /// Handle an inbound RequestVote RPC and decide whether to grant the vote.
     pub fn handle_request_vote(&mut self, args: RequestVoteArgs) -> RequestVoteReply {
-        // case if we want to vote for the candidate
+        // case 1 if we want to vote for the candidate
         if args.term > self.current_term {
             self.current_term = args.term;
             self.role = Role::Follower;
@@ -119,7 +125,7 @@ impl RaftNode {
         if args.term == self.current_term {
             let log_ok = self.log_up_to_date(args.last_log_index, args.last_log_term);
             let can_vote = self.voted_for.is_none() || self.voted_for == Some(args.candidate_id);
-            // we want to vote for candidate
+            // same case 1 we want to vote for candidate
             if can_vote && log_ok {
                 self.voted_for = Some(args.candidate_id);
                 vote_granted = true;
@@ -135,6 +141,7 @@ impl RaftNode {
         }
     }
 
+    /// Handle AppendEntries/heartbeat RPCs, updating log state and commit index.
     pub fn handle_append_entries(&mut self, args: AppendEntriesArgs) -> AppendEntriesReply {
         if args.term < self.current_term {
             return AppendEntriesReply {
@@ -198,6 +205,7 @@ impl RaftNode {
         }
     }
 
+    /// Check whether a candidate's log is at least as up-to-date as ours.
     fn log_up_to_date(&self, other_last_index: u64, other_last_term: u64) -> bool {
         let last_term = self.log.entries.last().map(|e| e.term).unwrap_or(0);
         let last_index = self.log.entries.len() as u64;
@@ -206,6 +214,7 @@ impl RaftNode {
         other_last_term > last_term || (other_last_term == last_term && other_last_index >= last_index)
     }
 
+    /// Build AppendEntries arguments for a specific follower index.
     fn heartbeat_args(&self, peer_idx: usize) -> AppendEntriesArgs {
         let next_index = self.next_index[peer_idx];
         let prev_log_index = next_index.saturating_sub(1);
@@ -228,6 +237,7 @@ impl RaftNode {
         }
     }
 
+    /// Apply committed log entries to the key-value state machine.
     fn apply_committed_entries(&mut self) {
         while self.last_applied < self.commit_index {
             self.last_applied += 1;
@@ -237,6 +247,7 @@ impl RaftNode {
         }
     }
 
+    /// Advance commit index based on majority match indices and apply newly committed entries.
     fn update_commit_index(&mut self) {
         let mut match_indexes = self.match_index.clone();
         match_indexes.push(self.log.last_index());
@@ -254,6 +265,7 @@ impl RaftNode {
     }
 }
 
+/// Periodic timer loop that triggers elections on timeout.
 pub fn spawn_tick_loop(node: Arc<Mutex<RaftNode>>) {
     tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_millis(50));
@@ -271,6 +283,7 @@ pub fn spawn_tick_loop(node: Arc<Mutex<RaftNode>>) {
     });
 }
 
+/// Launch an asynchronous election attempt and promote to leader on majority votes.
 fn spawn_election(node: Arc<Mutex<RaftNode>>, args: RequestVoteArgs, peers: Vec<String>) {
     tokio::spawn(async move {
         let total_nodes = peers.len() as u64 + 1;
@@ -303,6 +316,7 @@ fn spawn_election(node: Arc<Mutex<RaftNode>>, args: RequestVoteArgs, peers: Vec<
     });
 }
 
+/// Send periodic heartbeats and log replications to all peers while this node is leader.
 pub fn start_heartbeat_loop(node: Arc<Mutex<RaftNode>>) {
     tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_millis(100));
