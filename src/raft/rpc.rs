@@ -19,6 +19,7 @@ pub struct RequestVoteReply {
 pub struct AppendEntriesArgs {
     pub term: u64,
     pub leader_id: u64,
+    pub leader_addr: String,
     pub entries: Vec<LogEntry>,
     pub prev_log_index: u64,
     pub prev_log_term: u64,
@@ -31,6 +32,23 @@ pub struct AppendEntriesReply {
     pub success: bool
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "op", content = "data")]
+pub enum ClientRequest {
+    Get { key: String },
+    Put { key: String, value: String },
+    Delete { key: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "status", content = "data")]
+pub enum ClientResponse {
+    Ok,
+    Value(Option<String>),
+    NotLeader { leader_id: Option<u64>, leader_addr: Option<String> },
+    Error { message: String },
+}
+
 /// Top-level RPC request envelope.
 ///
 /// This avoids "guessing" message types based on JSON shape and makes the protocol extensible
@@ -40,6 +58,7 @@ pub struct AppendEntriesReply {
 pub enum RpcRequest {
     RequestVote(RequestVoteArgs),
     AppendEntries(AppendEntriesArgs),
+    Client(ClientRequest),
 }
 
 /// Top-level RPC response envelope.
@@ -48,6 +67,7 @@ pub enum RpcRequest {
 pub enum RpcResponse {
     RequestVote(RequestVoteReply),
     AppendEntries(AppendEntriesReply),
+    Client(ClientResponse),
 }
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -122,6 +142,13 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
             };
             RpcResponse::AppendEntries(reply)
         }
+        RpcRequest::Client(req) => {
+            let reply = {
+                let mut node = node.lock().unwrap();
+                node.handle_client_request(req)
+            };
+            RpcResponse::Client(reply)
+        }
     };
 
     let out = serde_json::to_vec(&resp)?;
@@ -157,5 +184,20 @@ pub async fn send_append_entries(addr: &str, args: &AppendEntriesArgs) -> Result
     match resp {
         RpcResponse::AppendEntries(reply) => Ok(reply),
         other => Err(anyhow!("unexpected response to AppendEntries: {other:?}")),
+    }
+}
+
+/// Send a client request to a node and decode the reply.
+pub async fn send_client_request(addr: &str, req: &ClientRequest) -> Result<ClientResponse> {
+    let mut stream = TcpStream::connect(addr).await?;
+    let wrapped = RpcRequest::Client(req.clone());
+    let data = serde_json::to_vec(&wrapped)?;
+    write_frame(&mut stream, &data).await?;
+
+    let buf = read_frame(&mut stream).await?;
+    let resp: RpcResponse = serde_json::from_slice(&buf)?;
+    match resp {
+        RpcResponse::Client(reply) => Ok(reply),
+        other => Err(anyhow!("unexpected response to Client request: {other:?}")),
     }
 }

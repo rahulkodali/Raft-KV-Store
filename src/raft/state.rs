@@ -7,7 +7,7 @@ use crate::raft::log::{LogEntry, Wal};
 use crate::raft::kv::KvStore;
 use crate::raft::rpc::{
     AppendEntriesArgs, AppendEntriesReply, RequestVoteArgs, RequestVoteReply, send_append_entries,
-    send_request_vote,
+    send_request_vote, ClientRequest, ClientResponse,
 };
 
 
@@ -20,11 +20,14 @@ pub enum Role {
 
 pub struct RaftNode {
     pub id: u64,
+    pub addr: String,
     pub peers: Vec<String>,
 
     pub role: Role,
     pub current_term: u64,
     pub voted_for: Option<u64>,
+    pub leader_id: Option<u64>,
+    pub leader_addr: Option<String>,
 
     pub log: Wal,
     pub kv: KvStore,
@@ -40,13 +43,16 @@ pub struct RaftNode {
 
 impl RaftNode {
     /// Construct a new Raft node with empty volatile state and a loaded WAL/KV.
-    pub fn new(id: u64, peers: Vec<String>, wal: Wal, kv: KvStore) -> Self {
+    pub fn new(id: u64, addr: String, peers: Vec<String>, wal: Wal, kv: KvStore) -> Self {
         let mut node = RaftNode {
             id,
+            addr,
             peers,
             role: Role::Follower,
             current_term: 0,
             voted_for: None,
+            leader_id: None,
+            leader_addr: None,
             log: wal,
             kv,
             commit_index: 0,
@@ -87,6 +93,8 @@ impl RaftNode {
         self.role = Role::Candidate;
         self.current_term += 1;
         self.voted_for = Some(self.id);
+        self.leader_id = None;
+        self.leader_addr = None;
         self.reset_election_timeout();
 
         let last_log_index = self.log.entries.len() as u64;
@@ -106,6 +114,8 @@ impl RaftNode {
     /// Transition to leader and initialize replication tracking indices.
     pub fn become_leader(&mut self) {
         self.role = Role::Leader;
+        self.leader_id = Some(self.id);
+        self.leader_addr = Some(self.addr.clone());
         let last_index = self.log.entries.len() as u64;
 
         self.next_index = vec![last_index + 1; self.peers.len()];
@@ -119,6 +129,8 @@ impl RaftNode {
             self.current_term = args.term;
             self.role = Role::Follower;
             self.voted_for = None;
+            self.leader_id = None;
+            self.leader_addr = None;
         }
 
         let mut vote_granted = false;
@@ -154,9 +166,14 @@ impl RaftNode {
             self.current_term = args.term;
             self.role = Role::Follower;
             self.voted_for = None;
+            self.leader_id = None;
         }
 
         self.reset_election_timeout();
+
+        // Track the current leader for client redirects.
+        self.leader_id = Some(args.leader_id);
+        self.leader_addr = Some(args.leader_addr.clone());
 
         if args.prev_log_index > self.log.last_index() {
             return AppendEntriesReply {
@@ -205,6 +222,25 @@ impl RaftNode {
         }
     }
 
+    /// Handle a client request (Get/Put/Delete).
+    ///
+    /// For now, reads and writes are leader-only: followers respond with a NotLeader hint.
+    pub fn handle_client_request(&mut self, req: ClientRequest) -> ClientResponse {
+        if self.role != Role::Leader {
+            return ClientResponse::NotLeader {
+                leader_id: self.leader_id,
+                leader_addr: self.leader_addr.clone(),
+            };
+        }
+
+        match req {
+            ClientRequest::Get { key } => ClientResponse::Value(self.kv.get(&key)),
+            ClientRequest::Put { .. } | ClientRequest::Delete { .. } => ClientResponse::Error {
+                message: "write path not implemented yet (need append/replicate/commit)".to_string(),
+            },
+        }
+    }
+
     /// Check whether a candidate's log is at least as up-to-date as ours.
     fn log_up_to_date(&self, other_last_index: u64, other_last_term: u64) -> bool {
         let last_term = self.log.entries.last().map(|e| e.term).unwrap_or(0);
@@ -230,6 +266,7 @@ impl RaftNode {
         AppendEntriesArgs {
             term: self.current_term,
             leader_id: self.id,
+            leader_addr: self.addr.clone(),
             prev_log_index,
             prev_log_term,
             entries,

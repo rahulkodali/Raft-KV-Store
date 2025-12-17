@@ -23,7 +23,13 @@ async fn main() -> anyhow::Result<()> {
         kv.apply(&entry.cmd);
     }
 
-    let node = Arc::new(Mutex::new(RaftNode::new(id, peers.clone(), wal, kv)));
+    let node = Arc::new(Mutex::new(RaftNode::new(
+        id,
+        addr.clone(),
+        peers.clone(),
+        wal,
+        kv,
+    )));
 
     spawn_tick_loop(node.clone());
 
