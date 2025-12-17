@@ -31,6 +31,25 @@ pub struct AppendEntriesReply {
     pub success: bool
 }
 
+/// Top-level RPC request envelope.
+///
+/// This avoids "guessing" message types based on JSON shape and makes the protocol extensible
+/// (e.g., adding client-facing requests later) without breaking decoding.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type", content = "data")]
+pub enum RpcRequest {
+    RequestVote(RequestVoteArgs),
+    AppendEntries(AppendEntriesArgs),
+}
+
+/// Top-level RPC response envelope.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type", content = "data")]
+pub enum RpcResponse {
+    RequestVote(RequestVoteReply),
+    AppendEntries(AppendEntriesReply),
+}
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use anyhow::{Result, anyhow};
@@ -87,23 +106,26 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
     // boundaries can deadlock when both sides wait for EOF before responding.
     let buf = read_frame(&mut socket).await?;
 
-    if let Ok(args) = serde_json::from_slice::<RequestVoteArgs>(&buf) {
-        let reply = {
-            let mut node = node.lock().unwrap();
-            node.handle_request_vote(args)
-        };
-        let out = serde_json::to_vec(&reply)?;
-        write_frame(&mut socket, &out).await?;
-    } else if let Ok(args) = serde_json::from_slice::<AppendEntriesArgs>(&buf) {
-        let reply = {
-            let mut node = node.lock().unwrap();
-            node.handle_append_entries(args)
-        };
-        let out = serde_json::to_vec(&reply)?;
-        write_frame(&mut socket, &out).await?;
-    } else {
-        return Err(anyhow!("unknown RPC payload"));
-    }
+    let req: RpcRequest = serde_json::from_slice(&buf)?;
+    let resp = match req {
+        RpcRequest::RequestVote(args) => {
+            let reply = {
+                let mut node = node.lock().unwrap();
+                node.handle_request_vote(args)
+            };
+            RpcResponse::RequestVote(reply)
+        }
+        RpcRequest::AppendEntries(args) => {
+            let reply = {
+                let mut node = node.lock().unwrap();
+                node.handle_append_entries(args)
+            };
+            RpcResponse::AppendEntries(reply)
+        }
+    };
+
+    let out = serde_json::to_vec(&resp)?;
+    write_frame(&mut socket, &out).await?;
     Ok(())
 }
 
@@ -111,22 +133,29 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
 pub async fn send_request_vote(addr: &str, args: &RequestVoteArgs) -> Result<RequestVoteReply> {
     let mut stream = TcpStream::connect(addr).await?;
 
-    let data = serde_json::to_vec(args)?;
+    let req = RpcRequest::RequestVote(args.clone());
+    let data = serde_json::to_vec(&req)?;
     write_frame(&mut stream, &data).await?;
 
     let buf = read_frame(&mut stream).await?;
-    let reply: RequestVoteReply = serde_json::from_slice(&buf)?;
-
-    Ok(reply)
+    let resp: RpcResponse = serde_json::from_slice(&buf)?;
+    match resp {
+        RpcResponse::RequestVote(reply) => Ok(reply),
+        other => Err(anyhow!("unexpected response to RequestVote: {other:?}")),
+    }
 }
 
 /// Send an AppendEntries (heartbeat or replication) RPC to a peer.
 pub async fn send_append_entries(addr: &str, args: &AppendEntriesArgs) -> Result<AppendEntriesReply> {
     let mut stream = TcpStream::connect(addr).await?;
-    let data = serde_json::to_vec(args)?;
+    let req = RpcRequest::AppendEntries(args.clone());
+    let data = serde_json::to_vec(&req)?;
     write_frame(&mut stream, &data).await?;
 
     let buf = read_frame(&mut stream).await?;
-    let reply: AppendEntriesReply = serde_json::from_slice(&buf)?;
-    Ok(reply)
+    let resp: RpcResponse = serde_json::from_slice(&buf)?;
+    match resp {
+        RpcResponse::AppendEntries(reply) => Ok(reply),
+        other => Err(anyhow!("unexpected response to AppendEntries: {other:?}")),
+    }
 }
