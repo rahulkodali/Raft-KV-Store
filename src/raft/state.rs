@@ -1,13 +1,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use anyhow::{anyhow, Result};
+use tokio::sync::Notify;
 use tokio::time;
 
-use crate::raft::log::{LogEntry, Wal};
+use crate::raft::log::{Command, LogEntry, Wal};
 use crate::raft::kv::KvStore;
 use crate::raft::rpc::{
     AppendEntriesArgs, AppendEntriesReply, RequestVoteArgs, RequestVoteReply, send_append_entries,
-    send_request_vote, ClientRequest, ClientResponse,
+    send_request_vote,
 };
 
 
@@ -39,6 +41,8 @@ pub struct RaftNode {
     pub match_index: Vec<u64>, // index known to be committed per each node
 
     pub election_deadline: Instant,
+
+    pub(crate) commit_notify: Arc<Notify>,
 }
 
 impl RaftNode {
@@ -60,6 +64,7 @@ impl RaftNode {
             next_index: Vec::new(),
             match_index: Vec::new(),
             election_deadline: Instant::now(),
+            commit_notify: Arc::new(Notify::new()),
         };
         node.reset_election_timeout();
         node
@@ -167,6 +172,7 @@ impl RaftNode {
             self.role = Role::Follower;
             self.voted_for = None;
             self.leader_id = None;
+            self.leader_addr = None;
         }
 
         self.reset_election_timeout();
@@ -212,8 +218,12 @@ impl RaftNode {
         }
 
         if args.leader_commit > self.commit_index {
+            let prev_commit = self.commit_index;
             self.commit_index = args.leader_commit.min(self.log.last_index());
             self.apply_committed_entries();
+            if self.commit_index != prev_commit {
+                self.commit_notify.notify_waiters();
+            }
         }
 
         AppendEntriesReply {
@@ -222,23 +232,28 @@ impl RaftNode {
         }
     }
 
-    /// Handle a client request (Get/Put/Delete).
+    /// Append a new command to the leader log and return its assigned log index.
     ///
-    /// For now, reads and writes are leader-only: followers respond with a NotLeader hint.
-    pub fn handle_client_request(&mut self, req: ClientRequest) -> ClientResponse {
+    /// Replication is driven by the heartbeat loop; clients should wait for `commit_index` to
+    /// advance (and the entry to be applied) before considering the write durable.
+    pub fn propose_command(&mut self, cmd: Command) -> Result<u64> {
         if self.role != Role::Leader {
-            return ClientResponse::NotLeader {
-                leader_id: self.leader_id,
-                leader_addr: self.leader_addr.clone(),
-            };
+            return Err(anyhow!("not leader"));
         }
 
-        match req {
-            ClientRequest::Get { key } => ClientResponse::Value(self.kv.get(&key)),
-            ClientRequest::Put { .. } | ClientRequest::Delete { .. } => ClientResponse::Error {
-                message: "write path not implemented yet (need append/replicate/commit)".to_string(),
-            },
-        }
+        let index = self.log.last_index() + 1;
+        let entry = LogEntry {
+            index,
+            term: self.current_term,
+            cmd,
+        };
+
+        self.log.append(&entry)?;
+
+        // For a single-node cluster, this commits immediately because "majority" is self.
+        self.update_commit_index();
+
+        Ok(index)
     }
 
     /// Check whether a candidate's log is at least as up-to-date as ours.
@@ -294,8 +309,12 @@ impl RaftNode {
         if candidate > self.commit_index {
             if let Some(term) = self.log.term_at(candidate) {
                 if term == self.current_term {
+                    let prev_commit = self.commit_index;
                     self.commit_index = candidate;
                     self.apply_committed_entries();
+                    if self.commit_index != prev_commit {
+                        self.commit_notify.notify_waiters();
+                    }
                 }
             }
         }

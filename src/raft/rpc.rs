@@ -72,9 +72,11 @@ pub enum RpcResponse {
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{timeout, Duration};
 use anyhow::{Result, anyhow};
 use std::sync::{Arc, Mutex};
-use crate::raft::state::RaftNode;
+use crate::raft::log::Command;
+use crate::raft::state::{RaftNode, Role};
 
 const MAX_FRAME_LEN: u32 = 16 * 1024 * 1024; // 16 MiB
 
@@ -143,10 +145,7 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
             RpcResponse::AppendEntries(reply)
         }
         RpcRequest::Client(req) => {
-            let reply = {
-                let mut node = node.lock().unwrap();
-                node.handle_client_request(req)
-            };
+            let reply = handle_client_rpc(node.clone(), req).await;
             RpcResponse::Client(reply)
         }
     };
@@ -154,6 +153,76 @@ async fn handle_connection(node: Arc<Mutex<RaftNode>>, mut socket: TcpStream) ->
     let out = serde_json::to_vec(&resp)?;
     write_frame(&mut socket, &out).await?;
     Ok(())
+}
+
+async fn handle_client_rpc(node: Arc<Mutex<RaftNode>>, req: ClientRequest) -> ClientResponse {
+    match req {
+        ClientRequest::Get { key } => {
+            let guard = node.lock().unwrap();
+            if guard.role != Role::Leader {
+                return ClientResponse::NotLeader {
+                    leader_id: guard.leader_id,
+                    leader_addr: guard.leader_addr.clone(),
+                };
+            }
+            ClientResponse::Value(guard.kv.get(&key))
+        }
+        ClientRequest::Put { key, value } => {
+            handle_client_write(node, Command::Put(key, value)).await
+        }
+        ClientRequest::Delete { key } => handle_client_write(node, Command::Delete(key)).await,
+    }
+}
+
+async fn handle_client_write(node: Arc<Mutex<RaftNode>>, cmd: Command) -> ClientResponse {
+    let (index, term, notify) = {
+        let mut guard = node.lock().unwrap();
+        if guard.role != Role::Leader {
+            return ClientResponse::NotLeader {
+                leader_id: guard.leader_id,
+                leader_addr: guard.leader_addr.clone(),
+            };
+        }
+        let term = guard.current_term;
+        let index = match guard.propose_command(cmd) {
+            Ok(index) => index,
+            Err(e) => {
+                return ClientResponse::Error {
+                    message: format!("failed to append entry: {e:?}"),
+                };
+            }
+        };
+        (index, term, guard.commit_notify.clone())
+    };
+
+    let wait = async {
+        loop {
+            {
+                let guard = node.lock().unwrap();
+                if guard.role != Role::Leader || guard.current_term != term {
+                    return ClientResponse::NotLeader {
+                        leader_id: guard.leader_id,
+                        leader_addr: guard.leader_addr.clone(),
+                    };
+                }
+                if guard.commit_index >= index {
+                    return ClientResponse::Ok;
+                }
+            }
+
+            tokio::select! {
+                _ = notify.notified() => {}
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+    };
+
+    match timeout(Duration::from_secs(5), wait).await {
+        Ok(resp) => resp,
+        Err(_) => ClientResponse::Error {
+            message: "timed out waiting for commit".to_string(),
+        },
+    }
 }
 
 /// Send a RequestVote RPC to a peer and decode the reply.
